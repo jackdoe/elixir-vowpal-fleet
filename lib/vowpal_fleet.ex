@@ -152,8 +152,27 @@ defmodule VowpalFleet.Worker do
     {:reply, predict(socket, namespaces), state}
   end
 
+  def handle_call({:load, model}, _from, state) do
+    {{name, _, _, _}, _} = state
+    File.write!(get_initial_regressor(name), model, [])
+
+    {{name, _, pid, socket}, delay} = state
+    :gen_tcp.close(socket)
+    kill(pid)
+
+    {new_port, new_pid, new_socket} = spawn_vw(name)
+
+    {:reply, :ok, {{name, new_port, new_pid, new_socket}, delay}}
+  end
+
   def handle_cast({:exit}, state) do
     {:stop, :shutdown, state}
+  end
+
+  def handle_call({:save}, _from, state) do
+    {{name, _, _, socket}, _} = state
+    model = save(socket, name)
+    {:reply, model, state}
   end
 
   def handle_info({:train, label, namespaces}, state) do
@@ -355,27 +374,27 @@ defmodule VowpalFleet do
   ## Examples
       iex> VowpalFleet.start_worker(:some_cluster_id, :instance_1)
       11:42:38.973 [info]  [swarm on nonode@nohost] [tracker:cluster_wait] joining cluster..
-      
+
       11:42:38.973 [info]  [swarm on nonode@nohost] [tracker:cluster_wait] no connected nodes, proceeding without sync
-      
+
       11:42:38.984 [debug] [swarm on nonode@nohost] [tracker:handle_call] registering :some_cluster_id_instance_1 as process started by Elixir.VowpalFleet.Supervisor.register/1 with args [some_cluster_id: :instance_1]
-      
+
       11:42:38.984 [debug] [swarm on nonode@nohost] [tracker:do_track] starting :some_cluster_id_instance_1 on nonode@nohost
-      
+
       11:42:38.984 [debug] killing 75225
-      
+
       11:42:38.991 [info]  waiting for /tmp/vw/vw.some_cluster_id_instance_1.port
-      
+
       11:42:39.992 [info]  waiting for /tmp/vw/vw.some_cluster_id_instance_1.port
-      
+
       11:42:39.993 [info]  waiting for /tmp/vw/vw.some_cluster_id_instance_1.pid
-      
+
       11:42:39.997 [debug] starting group: some_cluster_id, vw some_cluster_id_instance_1 60895 75980
-      
+
       11:42:39.997 [debug] autosaving every 3600000
-      
+
       11:42:40.000 [debug] [swarm on nonode@nohost] [tracker:do_track] started :some_cluster_id_instance_1 on nonode@nohost
-      
+
       11:42:40.002 [debug] [swarm on nonode@nohost] [tracker:handle_call] add_meta {:some_cluster_id, true} to #PID<0.218.0>
       :ok
       iex>
@@ -443,5 +462,50 @@ defmodule VowpalFleet do
   @spec train(atom(), integer, list(VowpalFleet.Type.namespace())) :: :ok
   def train(group, label, namespaces) do
     Swarm.publish(group, {:train, label, namespaces})
+  end
+
+  @doc """
+  load a binary model on all the nodes in a group
+
+  ## Parameters
+    - group: some kind of cluster id, for examle model_name (:linear_abc_something)
+    - model: binary output of File.read! of vowpal's regressor, or `Enum.random(VowpalFleet.save(:some_cluster_id))`
+
+  ## Examples
+      iex> VowpalFleet.start_worker(:some_cluster_id, :instance_1)
+      :ok
+      iex> VowpalFleet.load(:some_cluster_id, Enum.random(VowpalFleet.save(:some_cluster_id)))
+      [:ok]
+      iex>
+  """
+  @spec load(atom(), binary()) :: list(:ok)
+  def load(group, model) do
+    Swarm.multi_call(group, {:load, model})
+  end
+
+  @doc """
+  saves a binary model on all the nodes in a group, and returns a list of all the models, can be fed to `VowpalFleet.load/2`
+
+  ## Parameters
+    - group: some kind of cluster id, for examle model_name (:linear_abc_something)
+
+  ## Examples
+      iex> VowpalFleet.start_worker(:some_cluster_id, :instance_1)
+      :ok
+      iex> VowpalFleet.save(:some_cluster_id)
+
+      15:04:10.402 [info]  waiting for /tmp/vw/vw.some_cluster_id_instance_1.model
+
+      15:04:11.403 [info]  waiting for /tmp/vw/vw.some_cluster_id_instance_1.model
+      [
+        <<6, 0, 0, 0, 56, 46, 54, 46, 49, 0, 1, 0, 0, 0, 0, 109, 0, 0, 0, 0, 0, 0, 0,
+          0, 18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 32, 45, 45,
+          104, 97, ...>>
+      ]
+      iex>
+  """
+  @spec save(atom()) :: list(binary())
+  def save(group) do
+    Swarm.multi_call(group, {:save})
   end
 end
