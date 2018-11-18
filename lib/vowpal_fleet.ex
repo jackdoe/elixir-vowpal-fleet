@@ -36,7 +36,7 @@ defmodule VowpalFleet.Worker do
   use GenServer
 
   defp get_root() do
-    r = Application.get_env(:vowpal, :root)
+    r = Application.get_env(:vowpal_fleet, :root)
 
     case r do
       nil -> "/tmp/"
@@ -45,10 +45,10 @@ defmodule VowpalFleet.Worker do
   end
 
   defp get_group_arguments(group) do
-    r = Application.get_env(:vowpal, group)
+    r = Application.get_env(:vowpal_fleet, String.to_atom(group))
 
     case r do
-      nil -> %{:args => [], :autosave => 3600_1000}
+      nil -> %{:args => [], :autosave => 3600_000}
       _ -> r
     end
   end
@@ -134,10 +134,11 @@ defmodule VowpalFleet.Worker do
     %{:args => args, :autosave => autosave} = get_group_arguments(group)
     {port, pid, socket} = spawn_vw(real_name, args)
 
-    Logger.debug("starting vw #{real_name} #{port} #{pid}")
+    Logger.debug("starting group: #{group}, vw #{real_name} #{port} #{pid}")
 
     # XXX: get periodic save from the config
     if autosave > 0 do
+      Logger.debug("autosaving every #{autosave}")
       Process.send_after(self(), :save, autosave)
     end
 
@@ -156,12 +157,6 @@ defmodule VowpalFleet.Worker do
   def handle_info({:train, label, namespaces}, state) do
     {{_, _, _, socket}, _} = state
     train(socket, label, namespaces)
-    {:noreply, state}
-  end
-
-  def handle_cast({:save}, state) do
-    {{name, _, _, socket}, _} = state
-    save(socket, name)
     {:noreply, state}
   end
 
@@ -198,7 +193,7 @@ defmodule VowpalFleet.Worker do
 
   def handle_info(:save, state) do
     {{name, _, _, socket}, _} = state
-    spawn(fn -> save(name, socket) end)
+    spawn(fn -> save(socket, name) end)
     {:noreply, state}
   end
 
