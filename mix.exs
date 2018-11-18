@@ -11,7 +11,12 @@ defmodule VowpalFleet.MixProject do
       description: description(),
       package: package(),
       source_url: "https://github.com/jackdoe/elixir-vowpal-fleet",
-      name: "vowpal_fleet"
+      name: "vowpal_fleet",
+      docs: [
+        main: "VowpalFleet",
+        logo: "./logo.png",
+        extras: ["README.md"]
+      ]
     ]
   end
 
