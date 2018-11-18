@@ -4,6 +4,7 @@ defmodule VowpalFleet.Type do
 end
 
 defmodule VowpalFleet.Application do
+  @moduledoc false
   use Application
 
   def start(_type, _args) do
@@ -12,6 +13,7 @@ defmodule VowpalFleet.Application do
 end
 
 defmodule VowpalFleet.Supervisor do
+  @moduledoc false
   use Supervisor
 
   def start_link() do
@@ -32,6 +34,7 @@ defmodule VowpalFleet.Supervisor do
 end
 
 defmodule VowpalFleet.Worker do
+  @moduledoc false
   require Logger
   use GenServer
 
@@ -45,7 +48,7 @@ defmodule VowpalFleet.Worker do
   end
 
   defp get_group_arguments(group) do
-    r = Application.get_env(:vowpal_fleet, String.to_atom(group))
+    r = Application.get_env(:vowpal_fleet, group)
 
     case r do
       nil -> %{:args => [], :autosave => 3600_000}
@@ -136,7 +139,6 @@ defmodule VowpalFleet.Worker do
 
     Logger.debug("starting group: #{group}, vw #{real_name} #{port} #{pid}")
 
-    # XXX: get periodic save from the config
     if autosave > 0 do
       Logger.debug("autosaving every #{autosave}")
       Process.send_after(self(), :save, autosave)
@@ -275,12 +277,110 @@ defmodule VowpalFleet.Worker do
 end
 
 defmodule VowpalFleet do
+  @moduledoc """
+  Vowpal Fleet - manage [Vowpal Wabbit](https://github.com/VowpalWabbit/vowpal_wabbit) instances usint `Swarm`
+
+  * create one cluster per model using `VowpalFleet.start_worker/2`
+  * `VowpalFleet.train/3` goes to all living instance
+  * `VowpalFleet.predict/2` picks random instance to do the prediction
+  * configure auto save interval, root directory and vw options with mix config `:vowpal_fleet` in `config.exs`
+
+  ## Installation
+
+  * Make sure you have [Vowpal Wabbit](https://github.com/VowpalWabbit/vowpal_wabbit) installed and it is findable in `$PATH`
+  * add the dependency to your mix.exs
+
+  ```elixir
+  def deps do
+    [
+      {:vowpal_fleet, "~> 0.1.0"}
+    ]
+  end
+
+  def application do
+    [
+      extra_applications: [:vowpal_fleet]
+    ]
+  end
+  ```
+
+  * configure the parameters, edit `config/config.exs`
+
+  ```
+  config :vowpal_fleet,
+    root: "/tmp/vw",
+    some_cluster_id: %{:autosave => 300_000, :args => ["--random_seed", "123"]}
+  ```
+
+  ## Work In Progress
+  More testing is needed to ensure that the failure scenarios are covered, at the moment the code just works but.. well take it with grain of salt
+
+  ## Examples
+      iex> VowpalFleet.start_worker(:some_cluster_id, :instance_1)
+      ...
+      :ok
+      iex> VowpalFleet.start_worker(:some_cluster_id, :instance_2)
+      ...
+      :ok
+      iex> VowpalFleet.train(:some_cluster_id, 1, [{"features", [1, 2, 3]}])
+      :ok
+      iex> VowpalFleet.predict(:some_cluster_id, [{"features", [1, 2, 3]}])
+      1.0
+
+  ## Configuration
+      config :vowpal_fleet,
+        root: "/tmp/vw",
+        some_cluster_id: %{:autosave => 300_000, :args => ["--random_seed", "123"]}
+
+  ## Handoff
+
+  When the process has to be moved to a different node, the working model is saved, and then handed off to the starting process
+
+  ## Links
+  [issues](https://github.com/jackdoe/elixir-vowpal-fleet/issues) [fork](https://github.com/jackdoe/elixir-vowpal-fleet) [license - MIT](https://en.wikipedia.org/wiki/MIT_License)
+  """
   require Logger
 
   defp global_name(group, name) do
     String.to_atom("#{group}_#{name}")
   end
 
+  @doc """
+  Start a Vowpal Wabbit instance, (running local `vw --port 0 --daemon ...`) and connect to it usint TCP, then publish the new node in the `Swarm` using `Swarm.register_name/5`
+
+  ## Parameters
+    - group: some kind of cluster id, for examle model_name (:linear_abc_something)
+    - name: instance id (e.g. :xyz)
+
+  ## Examples
+      iex> VowpalFleet.start_worker(:some_cluster_id, :instance_1)
+      11:42:38.973 [info]  [swarm on nonode@nohost] [tracker:cluster_wait] joining cluster..
+      
+      11:42:38.973 [info]  [swarm on nonode@nohost] [tracker:cluster_wait] no connected nodes, proceeding without sync
+      
+      11:42:38.984 [debug] [swarm on nonode@nohost] [tracker:handle_call] registering :some_cluster_id_instance_1 as process started by Elixir.VowpalFleet.Supervisor.register/1 with args [some_cluster_id: :instance_1]
+      
+      11:42:38.984 [debug] [swarm on nonode@nohost] [tracker:do_track] starting :some_cluster_id_instance_1 on nonode@nohost
+      
+      11:42:38.984 [debug] killing 75225
+      
+      11:42:38.991 [info]  waiting for /tmp/vw/vw.some_cluster_id_instance_1.port
+      
+      11:42:39.992 [info]  waiting for /tmp/vw/vw.some_cluster_id_instance_1.port
+      
+      11:42:39.993 [info]  waiting for /tmp/vw/vw.some_cluster_id_instance_1.pid
+      
+      11:42:39.997 [debug] starting group: some_cluster_id, vw some_cluster_id_instance_1 60895 75980
+      
+      11:42:39.997 [debug] autosaving every 3600000
+      
+      11:42:40.000 [debug] [swarm on nonode@nohost] [tracker:do_track] started :some_cluster_id_instance_1 on nonode@nohost
+      
+      11:42:40.002 [debug] [swarm on nonode@nohost] [tracker:handle_call] add_meta {:some_cluster_id, true} to #PID<0.218.0>
+      :ok
+      iex>
+
+  """
   @spec start_worker(atom(), atom()) :: :ok
   def start_worker(group, name) do
     {:ok, pid} =
@@ -296,6 +396,20 @@ defmodule VowpalFleet do
     Swarm.join(group, pid)
   end
 
+  @doc """
+  Send `|namespace feature1 feature2:1\\n` ... to a random instance from the specified group of `Swarm.members/1`
+
+  ## Parameters
+    - group: some kind of cluster id, for examle model_name (:linear_abc_something)
+    - namespaces: training features of that example, list of `VowpalFleet.Type.namespace/0` type
+
+  ## Examples
+      iex> VowpalFleet.start_worker(:some_cluster_id, :instance_1)
+      :ok
+      iex(3)> VowpalFleet.predict(:some_cluster_id, [{"features", [1, 2, 3]}])
+      0.632031
+  """
+
   @spec predict(atom(), list(VowpalFleet.Type.namespace())) :: float()
   def predict(group, namespaces) do
     members = Swarm.members(group)
@@ -304,11 +418,28 @@ defmodule VowpalFleet do
     GenServer.call(who, {:predict, namespaces})
   end
 
+  @doc """
+  shut it down, kill the pid and close the socket
+  """
   @spec start_worker(atom(), atom()) :: :ok
   def exit(group, name) do
     GenServer.cast({:via, :swarm, global_name(group, name)}, {:exit})
   end
 
+  @doc """
+  Send `label |namespace feature1 feature2:1\\n` ... to vw in all the active instances using `Swarm.publish/2` for the selected cluster
+
+  ## Parameters
+    - group: some kind of cluster id, for examle model_name (:linear_abc_something)
+    - label: the training label (for example -1 for click, 1 for convert)
+    - namespaces: training features of that example, list of `VowpalFleet.Type.namespace/0` type
+
+  ## Examples
+      iex> VowpalFleet.start_worker(:some_cluster_id, :instance_1)
+      :ok
+      iex> VowpalFleet.train(:some_cluster_id, 1, [{"features", [1, 2, 3]}])
+      :ok
+  """
   @spec train(atom(), integer, list(VowpalFleet.Type.namespace())) :: :ok
   def train(group, label, namespaces) do
     Swarm.publish(group, {:train, label, namespaces})
