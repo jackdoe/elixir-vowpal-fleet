@@ -1,7 +1,7 @@
 defmodule VowpalFleet.Type do
   @type feature() :: {integer(), float()} | {String.t(), float()} | String.t() | integer()
   @type namespace() :: {Strinb.t(), list(feature())}
-  @type arm() :: {integer(), float(), float()}
+  @type action() :: {integer(), float(), float()}
 end
 
 defmodule VowpalFleet.Application do
@@ -242,19 +242,19 @@ defmodule VowpalFleet.Worker do
     data
   end
 
-  defp armsToVw(arms) do
-    arms
+  defp actionsToVw(actions) do
+    actions
     |> Enum.map(fn {id, cost, prob} -> "#{id}:#{cost}:#{prob}" end)
     |> Enum.join(" ")
   end
 
   @spec train(
           :gen_tcp.socket(),
-          integer() | list(VowpalFleet.Type.arm()),
+          integer() | list(VowpalFleet.Type.action()),
           list(VowpalFleet.Type.namespace())
         ) :: float()
   defp train(socket, label, namespaces) when is_list(label) do
-    sendToVw(socket, "#{armsToVw(label)} #{toLine(namespaces)}\n")
+    sendToVw(socket, "#{actionsToVw(label)} #{toLine(namespaces)}\n")
   end
 
   defp train(socket, label, namespaces) when is_integer(label) do
@@ -498,10 +498,10 @@ defmodule VowpalFleet do
 
   @doc """
   Send `label |namespace feature1 feature2:1\\n` ... to vw in all the active instances using `Swarm.publish/2` for the selected cluster
-  if label is array it will assume `--cb_explore` and send `arm_idx:cost:prob`
+  if label is array it will assume `--cb_explore` and send `action_idx:cost:prob` (read more on [Logged-Contextual-Bandit-Example](https://github.com/VowpalWabbit/vowpal_wabbit/wiki/Logged-Contextual-Bandit-Example)
   ## Parameters
     - group: some kind of cluster id, for examle model_name (:linear_abc_something)
-    - label: the training label (for example -1 for click, 1 for convert), or `[{1,100,0.3},{3,70,0.3}]` list of type `VowpalFleet.Type.arm/0`
+    - label: the training label (for example -1 for click, 1 for convert), or `[{1,100,0.3},{3,70,0.3}]` list of type `VowpalFleet.Type.action/0`
     - namespaces: training features of that example, list of `VowpalFleet.Type.namespace/0` type
 
   ## Examples
@@ -511,12 +511,15 @@ defmodule VowpalFleet do
       :ok
 
   ## Bandit Example
-  if yous tart vw with `"--cb_explore", "3"` you can send array of arms
+  if yous tart vw with `"--cb_explore", "3"` you can send array of actions
       iex> 
   """
 
-  @spec train(atom(), integer | list(VowpalFleet.Type.arm()), list(VowpalFleet.Type.namespace())) ::
-          :ok
+  @spec train(
+          atom(),
+          integer | list(VowpalFleet.Type.action()),
+          list(VowpalFleet.Type.namespace())
+        ) :: :ok
   def train(group, label, namespaces) do
     Swarm.publish(group, {:train, label, namespaces})
   end
