@@ -1,6 +1,7 @@
 defmodule VowpalFleet.Type do
   @type feature() :: {integer(), float()} | {String.t(), float()} | String.t() | integer()
   @type namespace() :: {Strinb.t(), list(feature())}
+  @type arm() :: {integer(), float(), float()}
 end
 
 defmodule VowpalFleet.Application do
@@ -47,15 +48,6 @@ defmodule VowpalFleet.Worker do
     end
   end
 
-  defp get_group_arguments(group) do
-    r = Application.get_env(:vowpal_fleet, group)
-
-    case r do
-      nil -> %{:args => [], :autosave => 3600_000}
-      _ -> r
-    end
-  end
-
   defp get_initial_regressor(name) do
     Path.join(get_root(), "vw.#{name}.model")
   end
@@ -91,22 +83,29 @@ defmodule VowpalFleet.Worker do
     File.rm(port_file)
     File.rm(pid_file)
 
+    a =
+      [
+        "--daemon",
+        "--num_children",
+        "1",
+        "--quiet",
+        "--no_stdin",
+        "--port",
+        "0",
+        "--pid_file",
+        pid_file,
+        "--port_file",
+        port_file
+      ] ++ args ++ extra_args
+
+    vw = System.find_executable("vw")
+
+    Logger.info("starting #{vw} #{Enum.join(a, " ")}")
+
     spawn(fn ->
       System.cmd(
-        System.find_executable("vw"),
-        [
-          "--daemon",
-          "--num_children",
-          "1",
-          "--quiet",
-          "--no_stdin",
-          "--port",
-          "0",
-          "--pid_file",
-          pid_file,
-          "--port_file",
-          port_file
-        ] ++ args ++ extra_args,
+        vw,
+        a,
         into: IO.stream(:stdio, :line)
       )
     end)
@@ -127,14 +126,28 @@ defmodule VowpalFleet.Worker do
     {port, pid, socket}
   end
 
-  def start_link({group, name}) do
-    GenServer.start_link(__MODULE__, {group, name})
+  def start_link({group, name, settings}) do
+    File.mkdir(get_root())
+    GenServer.start_link(__MODULE__, {group, name, settings})
   end
 
-  def init({group, name}) do
+  def get_settings(settings, group) do
+    if settings != nil do
+      settings
+    else
+      r = Application.get_env(:vowpal_fleet, group)
+
+      case r do
+        nil -> %{:args => [], :autosave => 3600_000}
+        _ -> r
+      end
+    end
+  end
+
+  def init({group, name, settings}) do
     real_name = String.to_atom("#{group}_#{name}")
 
-    %{:args => args, :autosave => autosave} = get_group_arguments(group)
+    %{:args => args, :autosave => autosave} = get_settings(settings, group)
     {port, pid, socket} = spawn_vw(real_name, args)
 
     Logger.debug("starting group: #{group}, vw #{real_name} #{port} #{pid}")
@@ -224,19 +237,47 @@ defmodule VowpalFleet.Worker do
 
   def sendToVw(socket, line) do
     :ok = :gen_tcp.send(socket, line)
+    Logger.debug("sending #{line}\n")
     {:ok, data} = :gen_tcp.recv(socket, 0)
     data
   end
 
-  @spec train(:gen_tcp.socket(), integer, list(VowpalFleet.Type.namespace())) :: float()
-  defp train(socket, label, namespaces) do
+  defp armsToVw(arms) do
+    arms
+    |> Enum.map(fn {id, cost, prob} -> "#{id}:#{cost}:#{prob}" end)
+    |> Enum.join(" ")
+  end
+
+  @spec train(
+          :gen_tcp.socket(),
+          integer() | list(VowpalFleet.Type.arm()),
+          list(VowpalFleet.Type.namespace())
+        ) :: float()
+  defp train(socket, label, namespaces) when is_list(label) do
+    sendToVw(socket, "#{armsToVw(label)} #{toLine(namespaces)}\n")
+  end
+
+  defp train(socket, label, namespaces) when is_integer(label) do
     sendToVw(socket, "#{label} #{toLine(namespaces)}\n")
   end
 
-  @spec predict(:gen_tcp.socket(), list(VowpalFleet.Type.namespace())) :: float()
+  @spec predict(:gen_tcp.socket(), list(VowpalFleet.Type.namespace())) :: float() | list(float())
   defp predict(socket, namespaces) do
-    {v, _} = Float.parse(sendToVw(socket, "#{toLine(namespaces)}\n"))
-    v
+    res = sendToVw(socket, "#{toLine(namespaces)}\n")
+
+    if String.contains?(res, " ") do
+      res
+      |> String.trim("\n")
+      |> String.split(" ")
+      |> Enum.filter(fn e -> String.length(e) > 0 end)
+      |> Enum.map(fn e ->
+        {v, _} = Float.parse(e)
+        v
+      end)
+    else
+      {v, _} = Float.parse(res)
+      v
+    end
   end
 
   def waitToExist(path, interval) do
@@ -329,6 +370,7 @@ defmodule VowpalFleet do
   config :vowpal_fleet,
     root: "/tmp/vw",
     some_cluster_id: %{:autosave => 300_000, :args => ["--random_seed", "123"]}
+    some_bandit_cluster: %{:autosave => 300_000, :args => ["--random_seed", "123", "--cb_explore", "3"]}
   ```
 
   ## Work In Progress
@@ -345,11 +387,18 @@ defmodule VowpalFleet do
       :ok
       iex> VowpalFleet.predict(:some_cluster_id, [{"features", [1, 2, 3]}])
       1.0
+      iex> VowpalFleet.start_worker(:test_abc_bandit, :a_1, %{:autosave => 60_000,:args => ["--cb_explore", "3"]})
+      :ok
+      iex> VowpalFleet.train(:test_abc_bandit, [{1, 100, 0.7}, {3, 70, 0.3}], [{:test_abc, [1, 2, 3]}])
+      :ok
+      iex> VowpalFleet.predict(:test_abc_bandit, [{:test_abc, [1, 2, 3]}])
+      [0.016667, 0.966667, 0.016667]
 
   ## Configuration
       config :vowpal_fleet,
         root: "/tmp/vw",
-        some_cluster_id: %{:autosave => 300_000, :args => ["--random_seed", "123"]}
+        some_cluster_id: %{:autosave => 300_000, :args => ["--random_seed", "123",]}
+        some_bandit: %{:autosave => 300_000, :args => ["--random_seed", "123", "--cb_explore","3"]}
 
   ## Handoff
 
@@ -370,7 +419,7 @@ defmodule VowpalFleet do
   ## Parameters
     - group: some kind of cluster id, for examle model_name (:linear_abc_something)
     - name: instance id (e.g. :xyz)
-
+    - settings: you can send parameters same as config :vowpal_fleet, :cluster_id like `%{:autosave => 300_000, :args => ["--random_seed", "123", "--cb_explore","3"]}`
   ## Examples
       iex> VowpalFleet.start_worker(:some_cluster_id, :instance_1)
       11:42:38.973 [info]  [swarm on nonode@nohost] [tracker:cluster_wait] joining cluster..
@@ -397,18 +446,20 @@ defmodule VowpalFleet do
 
       11:42:40.002 [debug] [swarm on nonode@nohost] [tracker:handle_call] add_meta {:some_cluster_id, true} to #PID<0.218.0>
       :ok
-      iex>
+      iex> VowpalFleet.start_worker(:test_abc_bandit, :a_1, %{:autosave => 60_000,:args => ["--cb_explore", "3"]})
+      ...
+      :ok
 
   """
-  @spec start_worker(atom(), atom()) :: :ok
-  def start_worker(group, name) do
+  @spec start_worker(atom(), atom(), map()) :: :ok
+  def start_worker(group, name, settings \\ nil) do
     {:ok, pid} =
       Swarm.register_name(
         global_name(group, name),
         VowpalFleet.Supervisor,
         :register,
         [
-          {group, name}
+          {group, name, settings}
         ]
       )
 
@@ -447,10 +498,10 @@ defmodule VowpalFleet do
 
   @doc """
   Send `label |namespace feature1 feature2:1\\n` ... to vw in all the active instances using `Swarm.publish/2` for the selected cluster
-
+  if label is array it will assume `--cb_explore` and send `arm_idx:cost:prob`
   ## Parameters
     - group: some kind of cluster id, for examle model_name (:linear_abc_something)
-    - label: the training label (for example -1 for click, 1 for convert)
+    - label: the training label (for example -1 for click, 1 for convert), or `[{1,100,0.3},{3,70,0.3}]` list of type `VowpalFleet.Type.arm/0`
     - namespaces: training features of that example, list of `VowpalFleet.Type.namespace/0` type
 
   ## Examples
@@ -458,8 +509,14 @@ defmodule VowpalFleet do
       :ok
       iex> VowpalFleet.train(:some_cluster_id, 1, [{"features", [1, 2, 3]}])
       :ok
+
+  ## Bandit Example
+  if yous tart vw with `"--cb_explore", "3"` you can send array of arms
+      iex> 
   """
-  @spec train(atom(), integer, list(VowpalFleet.Type.namespace())) :: :ok
+
+  @spec train(atom(), integer | list(VowpalFleet.Type.arm()), list(VowpalFleet.Type.namespace())) ::
+          :ok
   def train(group, label, namespaces) do
     Swarm.publish(group, {:train, label, namespaces})
   end
