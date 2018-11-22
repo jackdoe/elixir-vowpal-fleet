@@ -1,6 +1,6 @@
 defmodule VowpalFleet.Type do
   @type feature() :: {integer(), float()} | {String.t(), float()} | String.t() | integer()
-  @type namespace() :: {Strinb.t(), list(feature())}
+  @type namespace() :: {String.t(), list(feature())}
   @type action() :: {integer(), float(), float()}
 end
 
@@ -451,7 +451,7 @@ defmodule VowpalFleet do
       :ok
 
   """
-  @spec start_worker(atom(), atom(), map()) :: :ok
+  @spec start_worker(atom(), atom(), %{} | nil) :: :ok
   def start_worker(group, name, settings \\ nil) do
     {:ok, pid} =
       Swarm.register_name(
@@ -491,7 +491,7 @@ defmodule VowpalFleet do
   @doc """
   shut it down, kill the pid and close the socket
   """
-  @spec start_worker(atom(), atom()) :: :ok
+  @spec exit(atom(), atom()) :: :ok
   def exit(group, name) do
     GenServer.cast({:via, :swarm, global_name(group, name)}, {:exit})
   end

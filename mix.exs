@@ -4,7 +4,7 @@ defmodule VowpalFleet.MixProject do
   def project do
     [
       app: :vowpal_fleet,
-      version: "0.1.3",
+      version: "0.1.4",
       elixir: "~> 1.7",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -31,7 +31,8 @@ defmodule VowpalFleet.MixProject do
     [
       {:swarm, "~> 3.0"},
       {:earmark, "~> 1.2", only: :dev},
-      {:ex_doc, "~> 0.19", only: :dev}
+      {:ex_doc, "~> 0.19", only: :dev},
+      {:dialyxir, "~> 1.0.0-rc.4", only: [:dev], runtime: false}
     ]
   end
 
