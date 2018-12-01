@@ -512,7 +512,11 @@ defmodule VowpalFleet do
 
   ## Bandit Example
   if yous tart vw with `"--cb_explore", "3"` you can send array of actions
-      iex> 
+      iex> VowpalFleet.start_worker(:bandit, :node, %{:autosave => 300_000, :args => ["--random_seed", "123", "--cb_explore", "3"]})
+      iex> VowpalFleet.train(:bandit, [{1, 100, 0.7}, {3, 70, 0.3}], [{:namespace, [1, 2, 3]}])
+      :ok
+      iex> VowpalFleet.predict(:bandit,[{:namespace, [1, 2, 3]}])
+      [0.016667, 0.966667, 0.016667]
   """
 
   @spec train(
