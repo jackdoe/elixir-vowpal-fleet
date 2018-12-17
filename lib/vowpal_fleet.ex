@@ -451,7 +451,11 @@ defmodule VowpalFleet do
       :ok
 
   """
-  @spec start_worker(atom(), atom(), %{} | nil) :: :ok
+  @spec start_worker(
+          atom(),
+          atom() | node(),
+          %{:autosave => pos_integer(), :args => list(String.t())} | nil
+        ) :: :ok
   def start_worker(group, name, settings \\ nil) do
     {:ok, pid} =
       Swarm.register_name(

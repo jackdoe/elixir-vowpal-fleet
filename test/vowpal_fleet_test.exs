@@ -3,7 +3,8 @@ defmodule VowpalFleetTest do
 
   test "greets the world" do
     System.cmd("killall", ["-9", "vw"])
-
+    VowpalFleet.start_worker(:test_abc, node())
+    IO.inspect(VowpalFleet.exit(:test_abc, node()))
     VowpalFleet.start_worker(:test_abc, :a_1)
 
     VowpalFleet.start_worker(:test_abc, :a_2)
